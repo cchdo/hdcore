@@ -3,6 +3,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship, backref
 from sqlalchemy import (Column, DateTime,
         Integer, String, Enum, ForeignKey, Float)
+from sqlalchemy.orm.exc import NoResultFound
 
 #for now and testing, this will change to postgresql when more final
 engine = create_engine('sqlite:///:memory:', echo=False)
@@ -24,7 +25,16 @@ class XYT(Base):
         self.datetime = datetime
 
     def __repr__(self):
-        return "<XYT (%s, %s, %2)>" % (self.lon, self.lat, self.datetime)
+        return "<XYT (%s, %s, %s)>" % (self.lon, self.lat, self.datetime)
+
+    @classmethod
+    def find_or_new(cls, session, new_lon, new_lat, new_datetime)
+        try:
+            q = session.query(cls).filter_by(lon = new_lon, lat = new_lat,
+                    datetime = new_datetime).one()
+            return q
+        except NoResultFound:
+            return cls(new_lon, new_lat, new_datetime)
 
 class Parameter(Base):
     __tablename__ = "parameters"
@@ -32,12 +42,17 @@ class Parameter(Base):
     #TODO make this conform to CF standards and have some sort of translation
     #between CCHDO and CF standards
     id = Column(Integer, primary_key=True)
-    name = Column(String, nullable=False)
-    short_name = Column(String, nullable=False)
+    name = Column(String, nullable=False, unique=True)
+    short_name = Column(String, nullable=False, unique=True)
     precision = Column(String, nullable=False)
     range_max = Column(Float)
     range_min = Column(Float)
     unit_id = Column(Float, ForeignKey("units.id"))
+
+    # it shall be convention that the relationship should be establish by the
+    # class with the foreign key in it
+
+    unit = relationship("Unit", backref="parameters")
     
     def __init__(self, name, short_name, precision, range_max=None,
             range_min=None):
@@ -52,6 +67,14 @@ class Parameter(Base):
                 self.short_name, self.precision, self.range_min,
                 self.range_max)
 
+    @classmethod
+    def find_or_new(cls, session, new_name, new_shortname, new_precision):
+        try:
+            q = session.query(cls).filter_by(name = new_name).one()
+            return q
+        except NoResultFound:
+            return cls(new_name, new_shortname, new_precision)
+
 class Unit(Base):
     __tablename__ = "units"
     # ideally this class will be able to convert/keep track of unit conversions
@@ -64,6 +87,14 @@ class Unit(Base):
 
     def __repr__(self):
         return "<Unit ('%s')>" % (self.name)
+
+    @classmethod
+    def find_or_new(cls, session, new_name):
+        try:
+            q = session.query(cls).filter_by(name = new_name).one()
+            return q
+        except NoResultFound:
+            return cls(new_name)
 
 
 class Expocode(Base):
@@ -78,6 +109,14 @@ class Expocode(Base):
     def __repr__(self):
         return "<Expocode: %s>" % (self.expocode)
 
+    @classmethod
+    def find_or_new(cls, session, new_expocode):
+        try:
+            q = session.query(cls).filter_by(expocode = new_expocode).one()
+            return q
+        except NoResultFound:
+            return cls(new_expocode)
+
 
 class Section(Base):
     __tablename__ = "sections"
@@ -89,7 +128,7 @@ class Section(Base):
     program_id = Column(Integer, ForeignKey('programs.id'))
     description = Column(String)
 
-    #TODO add the relationship
+    program = relationship("Program", backref="sections")
 
     def __init__(self, name, trackline, description):
         self.name = name
@@ -110,6 +149,9 @@ class Station(Base):
     station_number = Column(Integer, nullable=False)
     cast_number = Column(Integer, nullable=False)
     bottom_depth = Column(Integer)
+
+    xyt = relationship("XYT", backref="station")
+    cruise = relationship("Cruise", backref="stations")
 
     def __init__(self, station_number, cast_number, bottom_depth=None):
         self.station_number = station_number
@@ -145,13 +187,22 @@ class Cruise(Base):
     __tablename__ = "cruises"
 
     id = Column(Integer, primary_key=True)
-    expocode_id = Column(Integer, ForeignKey('expocodes.id'), nullable=False)
-    start_port_id = Column(Integer, ForeignKey('ports.id'), nullable=False)
-    end_port_id = Column(Integer, ForeignKey('ports.id'), nullable=False)
-    start_date = Column(DateTime, nullable=False)
-    end_date = Column(DateTime, nullable=False)
+    expocode_id = Column(Integer, ForeignKey('expocodes.id'), nullable=False,
+            unique=True) #this should probably be moved to the expocode table
+    start_port_id = Column(Integer, ForeignKey('ports.id'), )#nullable=False)
+    end_port_id = Column(Integer, ForeignKey('ports.id'), )#nullable=False)
+    start_date = Column(DateTime,)# nullable=False)
+    end_date = Column(DateTime,)# nullable=False)
     section_id = Column(Integer, ForeignKey('sections.id'))
     platform_id = Column(Integer, ForeignKey('platforms.id'))
+
+    expocode = relationship("Expocode", backref="cruise")
+    start_port = relationship("Port", backref="cruise_origins",
+            foreign_keys=start_port_id)
+    end_port = relationship("Port", backref="cruise_destinations",
+            foreign_keys=end_port_id)
+    section = relationship("Section", backref="section")
+    platform = relationship("Platform", backref="cruises")
 
     def __init__(self, start_date, end_date):
         self.start_date = start_date
@@ -171,6 +222,8 @@ class Platform(Base):
     kind = Column(String, nullable=False)
     NODC_code = Column(String, nullable=False) 
     institution_id = Column(Integer, ForeignKey('institutions.id'), nullable=False)
+
+    institution = relationship("Institution", backref="platforms")
 
     def __init__(self, name, kind, NODC_code):
         self.name = name
@@ -207,14 +260,21 @@ class Measurement(Base):
     XYT_id = Column(Integer, ForeignKey('xyt.id'), nullable=False)
     parameter_id = Column(Integer, ForeignKey('parameters.id'), nullable=False)
     #TODO add blame (like the PI responsible)
-    quality_id = Column(Integer, ForeignKey('quality.id'), nullable=False)
+    quality_id = Column(Integer, ForeignKey('quality.id'), nullable=True)
+
+    #temporary data place to live!
+    value = Column(String, nullable=False)
 
     #only if known...
     instrument_id = Column(Integer, ForeignKey('instruments.id'))
 
-    def __init__(self):
-        # I don't know if this is needed
-        pass
+    xyt = relationship("XYT", backref="measurements")
+    parameter = relationship("Parameter", backref="xyt")
+    quality = relationship("Quality", backref="measurements")
+    instruemnt = relationship("Instrument", backref="measuremnts")
+
+    def __init__(self, value):
+        self.value = value
 
     def __repr__(self):
         return "<Measurement (%s)>" % (self.id)
@@ -224,7 +284,7 @@ class Quality(Base):
     __tablename__ = "quality"
 
     id = Column(Integer, primary_key=True)
-    name = Column(String, nullable=False)
+    name = Column(String, nullable=False, unique=True)
     description = Column(String, nullable=False)
 
     def __init__(self, name, description):
@@ -234,6 +294,14 @@ class Quality(Base):
     def __repr__(self):
         return "<Quality (%s, '%s', '%s')>" % (self.id, self.name,
                 self.description)
+
+    @classmethod
+    def find_or_new(cls, session, new_name, description):
+        try:
+            q = session.query(cls).filter_by(name = new_name).one()
+            return q
+        except NoResultFound:
+            return cls(new_name, description)
 
 class Institution(Base):
     __tablename__ = "institutions"
