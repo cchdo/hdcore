@@ -1,7 +1,7 @@
 from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.orm import relationship, backref
 from sqlalchemy import (Column, DateTime,
-        Integer, String, Enum, ForeignKey, Float, Text)
+        Integer, String, Enum, ForeignKey, Float, Text, Numeric)
 from sqlalchemy.orm.exc import NoResultFound
 
 #for now and testing, this will change to postgresql when more final
@@ -267,33 +267,36 @@ class Program(Base):
 
 
 class Measurement(Base):
-    __tablename__ = "measurements"
+    __tablename__ = "measurement"
 
     id = Column(Integer, primary_key=True)
-    XYT_id = Column(Integer, ForeignKey('xyt.id'), nullable=False)
-    parameter_id = Column(Integer, ForeignKey('parameters.id'), nullable=False)
-    #TODO add blame (like the PI responsible)
-    quality_id = Column(Integer, ForeignKey('quality.id'), nullable=True)
-    primary_id = Column(Integer, ForeignKey('measurements.id'), nullable=True)
+    #XYT_id = Column(Integer, ForeignKey('xyt.id'), nullable=False)
+    #parameter_id = Column(Integer, ForeignKey('parameters.id'), nullable=False)
+    ##TODO add blame (like the PI responsible)
+    #quality_id = Column(Integer, ForeignKey('quality.id'), nullable=True)
+    #primary_id = Column(Integer, ForeignKey('measurements.id'), nullable=True)
 
-    #temporary data place to live!
-    value = Column(Float, nullable=False)
+    ##temporary data place to live!
+    value = Column(String(50), nullable=False)
+    
+    sample_group = Column(Integer, nullable=False)
+    profile_id = Column(Integer, nullable=False)
 
-    #only if known...
-    instrument_id = Column(Integer, ForeignKey('instruments.id'))
+    ##only if known...
+    #instrument_id = Column(Integer, ForeignKey('instruments.id'))
 
-    xyt = relationship("XYT", backref="measurements")
-    parameter = relationship("Parameter", backref="xyt")
-    quality = relationship("Quality", backref="measurements")
-    instruemnt = relationship("Instrument", backref="measuremnts")
-    primary = relationship("Measurement", remote_side=[id],
-    backref="dependants", post_update=True)
+    #xyt = relationship("XYT", backref="measurements")
+    #parameter = relationship("Parameter", backref="xyt")
+    #quality = relationship("Quality", backref="measurements")
+    #instruemnt = relationship("Instrument", backref="measuremnts")
+    #primary = relationship("Measurement", remote_side=[id],
+    #backref="dependants", post_update=True)
 
     def __init__(self, value):
         self.value = value
 
     def __repr__(self):
-        return "<Measurement (%s, '%s')>" % (self.value, self.parameter.name)
+        return "<Measurement (%s)>" % (self.value)
 
     def __cmp__(self, other):
         return float(self.value) - float(other.value)
