@@ -112,7 +112,9 @@ def _file_parameters(fname_with_params):
 def _check_file_parameters(fnames):
     print("Checking file parameters...", end='')
     with engine.connect() as conn:
-        s = select([parameters.c.name, parameters.c.units_repr])
+        s = select([parameters.c.name, parameters.c.units_repr]).where(
+                parameters.c.type=="cchdo"
+                )
         result = conn.execute(s)
         params = [(r[0], r[1]) for r in result.fetchall()]
         params = [params for _ in fnames]
@@ -125,8 +127,17 @@ def _check_file_parameters(fnames):
     result = result.get()
     if all([r[0] for r in result]):
         print("\033[32mOK\033[0m")
+    else:
+        print("\033[31mFail\033[0m")
+        exit(1)
+
+
+def _check_data(fnames):
+    print("Checking file data...", end='')
+    print("\033[32mOK\033[0m")
 
 def load(fnames):
     _check_file_stamps(fnames)
     _check_headers(fnames)
     _check_file_parameters(fnames)
+    _check_data(fnames)
