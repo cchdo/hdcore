@@ -3,7 +3,7 @@ from multiprocessing import Pool
 
 from sqlalchemy.sql import select
 
-from hdcore.model.db import cruises, engine, parameters
+from hdcore.model.db import cruises, engine, parameters, quality
 
 def _stamp_check(fname):
     with open(fname) as f:
@@ -88,6 +88,7 @@ def _check_headers(fnames, print_status):
             print("\033[32mOK\033[0m")
 
 def _file_parameters(fname_with_params):
+    # TODO check to see if the corrisponding column exists for a flag column
     import csv
     fname = fname_with_params[0]
     known = fname_with_params[1]
@@ -103,7 +104,11 @@ def _file_parameters(fname_with_params):
         reader = csv.reader(f, delimiter=',')
         params = reader.next()
         units = [u if len(u) > 0 else None for u in reader.next()]
+        if len(params) is not len(units):
+            return (False, fname, "Parameter units mismatch")
         pairs = zip(params, units)
+        if len(pairs) is not len(set(pairs)):
+            return (False, fname, "Duplicated parameters")
         if len(params) is not len(units):
             return (False, fname, "Parameter unit mismatch")
         for pair in pairs:
@@ -129,23 +134,72 @@ def _check_file_parameters(fnames, print_status):
     pool.close()
     pool.join()
     result = result.get()
-    if print_status:
-        if all([r[0] for r in result]):
+    if all([r[0] for r in result]):
+        if print_status:
             print("\033[32mOK\033[0m")
-        else:
+    else:
+        if print_status:
             print("\033[31mFail\033[0m")
 
 def _data(fname_with_params):
     import csv
     fname = fname_with_params[0]
     known = fname_with_params[1]
-    ops = {}
-    for param in known:
-        ops[(param[0], param[1])] = (param[2], param[3])
-    checker = {}
-    checker['float'] = float
-    checker['string'] = str
-    checker['integer'] = int
+    q_flags = fname_with_params[2]
+    known = {(k[0], k[1]):{
+        "id":k[2],
+        "format": k[3],
+        "quality": k[4],
+        "quality_class": k[5],
+        } for k in known}
+
+    def row_length_ok(row, pairs):
+        return len(row) is len(pairs)
+
+    def data_types_ok(row, pairs, known):
+        for point, pair in zip(row, pairs):
+            param = known[pair]
+            if param["format"].endswith('f'):
+                try:
+                    float(point)
+                except TypeError:
+                    return False
+            elif param["format"].endswith('s'):
+                try:
+                    str(point)
+                except TypeError:
+                    return False
+            elif param["format"].endswith('i'):
+                try:
+                    int(point)
+                except TypeError:
+                    return False
+            else:
+                return False
+        return True
+
+    def data_values_ok(row, pairs, known, q_flags):
+        """This is probably the most complicated check.
+        Here the row is being checked to see if the following:
+        1) Flag columns have allowed values in them
+        2) Where flags indicate that there should be no data, the corresponding
+        data column has a fill value
+        3) where the flags indicate that there should be data, the
+        corresponding data column has a non fill value
+        """
+        # check the flag values and make a list of things that should have data
+        data_mask = [True for _ in row] #assume all positions should have data
+        for point, pair in zip(row, pairs):
+            if known[pair]["quality_class"] is None:
+                continue
+            allowed_values = {}
+            for q in q_flags:
+                if q[0] == known[pair]["quality_class"]:
+                    allowed_values[q[1]] = q[2]
+            if point not in allowed_values:
+                return False
+            
+        return True
 
     with open(fname) as f:
         stamp = f.readline()
@@ -160,27 +214,17 @@ def _data(fname_with_params):
         params = reader.next()
         units = [u if len(u) > 0 else None for u in reader.next()]
         pairs = zip(params, units)
-        check_type = []
-        check_allowed = []
-        for pair in pairs:
-            check_type.append(checker[ops[pair][0]])
-            check_allowed.append(ops[pair][1])
          
         for row in reader:
             if row[0] == "END_DATA":
                 return (True, fname, 'ok')
-            if len(row) != len(pairs):
+            if not row_length_ok(row, pairs):
                 return (False, fname, "Data row length mismatch")
-            for d, t, a in zip(row, check_type, check_allowed):
-                try:
-                    t(d.strip())
-                except ValueError:
-                    return (False, fname, "invalid data")
-                if a:
-                    if d.strip() not in a:
-                        return (False, fname, "invalid flag")
-                
-        
+            if not data_types_ok(row, pairs, known):
+                return (False, fname, "Some data is not formatted well")
+            if not data_values_ok(row, pairs, known, q_flags):
+                return (False, fname, "Some data is inconsistent/invalid")
+        return (False, fname, 'No "END_DATA" in file')
 
 def _check_data(fnames, print_status):
     if print_status:
@@ -189,19 +233,33 @@ def _check_data(fnames, print_status):
         s = select([
             parameters.c.name,
             parameters.c.units_repr,
-            parameters.c.integrity_data_type,
-            parameters.c.integrity_allowed_values,
+            parameters.c.id,
+            parameters.c.format_string,
+            parameters.c.quality,
+            parameters.c.quality_class,
             ]).where(
                     parameters.c.type=="cchdo"
                     )
         result= conn.execute(s)
-        params = [(r[0], r[1], r[2], r[3]) for r in result.fetchall()]
+        params = [r for r in result.fetchall()]
         params = [params for _ in fnames]
+        s = select([
+            quality.c.quality_class,
+            quality.c.value,
+            quality.c.has_data,
+            ])
+        result = conn.execute(s)
+        q_flags = [r for r in result.fetchall()]
+        q_flags = [q_flags for _ in fnames]
 
-    fnames_with_params = zip(fnames, params)
+    fnames_with_params = zip(fnames, params, q_flags)
+    #print(_data(fnames_with_params[0]))
+    #exit()
     pool = Pool()
     result = pool.map_async(_data, fnames_with_params)
-    result.get()
+    # Just throwing this in so it actually runs
+    r = result.get()
+    #TODO make this actually report things
     if print_status:
         print("\033[32mOK\033[0m")
 
