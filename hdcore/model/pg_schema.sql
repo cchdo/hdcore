@@ -133,7 +133,8 @@ CREATE TABLE parameters (
     units_repr text,
     quality integer,
     canonical_id integer,
-    quality_defs integer
+    format_string text,
+    quality_class text
 );
 
 
@@ -179,13 +180,6 @@ COMMENT ON COLUMN parameters.quality IS 'If this parameter is a quality code, wh
 --
 
 COMMENT ON COLUMN parameters.canonical_id IS 'Points to the parameter def that should be used when writing/returning the data, the presences of data here means that this definition exists for reading badly formatted or old format files';
-
-
---
--- Name: COLUMN parameters.quality_defs; Type: COMMENT; Schema: public; Owner: abarna
---
-
-COMMENT ON COLUMN parameters.quality_defs IS 'A pointer to the set of definitions for the quality code';
 
 
 --
@@ -257,6 +251,65 @@ ALTER SEQUENCE profiles_id_seq OWNED BY profiles.id;
 
 
 --
+-- Name: quality; Type: TABLE; Schema: public; Owner: abarna; Tablespace: 
+--
+
+CREATE TABLE quality (
+    id integer NOT NULL,
+    quality_class text,
+    value text,
+    description text,
+    has_data boolean,
+    default_data_present boolean DEFAULT false,
+    default_data_missing boolean DEFAULT false
+);
+
+
+ALTER TABLE quality OWNER TO abarna;
+
+--
+-- Name: COLUMN quality.has_data; Type: COMMENT; Schema: public; Owner: abarna
+--
+
+COMMENT ON COLUMN quality.has_data IS 'E.g. a woce bottle flag 1 should have no data';
+
+
+--
+-- Name: COLUMN quality.default_data_present; Type: COMMENT; Schema: public; Owner: abarna
+--
+
+COMMENT ON COLUMN quality.default_data_present IS 'If there is no flag data, and data is present, assume this flag';
+
+
+--
+-- Name: COLUMN quality.default_data_missing; Type: COMMENT; Schema: public; Owner: abarna
+--
+
+COMMENT ON COLUMN quality.default_data_missing IS 'If there is no data AND no flag present, assume this flag';
+
+
+--
+-- Name: quality_id_seq; Type: SEQUENCE; Schema: public; Owner: abarna
+--
+
+CREATE SEQUENCE quality_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE quality_id_seq OWNER TO abarna;
+
+--
+-- Name: quality_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: abarna
+--
+
+ALTER SEQUENCE quality_id_seq OWNED BY quality.id;
+
+
+--
 -- Name: id; Type: DEFAULT; Schema: public; Owner: abarna
 --
 
@@ -282,6 +335,13 @@ ALTER TABLE ONLY parameters ALTER COLUMN id SET DEFAULT nextval('parameters_id_s
 --
 
 ALTER TABLE ONLY profiles ALTER COLUMN id SET DEFAULT nextval('profiles_id_seq'::regclass);
+
+
+--
+-- Name: id; Type: DEFAULT; Schema: public; Owner: abarna
+--
+
+ALTER TABLE ONLY quality ALTER COLUMN id SET DEFAULT nextval('quality_id_seq'::regclass);
 
 
 --
@@ -314,6 +374,14 @@ ALTER TABLE ONLY parameters
 
 ALTER TABLE ONLY profiles
     ADD CONSTRAINT profiles_pk PRIMARY KEY (id);
+
+
+--
+-- Name: quality_pk; Type: CONSTRAINT; Schema: public; Owner: abarna; Tablespace: 
+--
+
+ALTER TABLE ONLY quality
+    ADD CONSTRAINT quality_pk PRIMARY KEY (id);
 
 
 --
