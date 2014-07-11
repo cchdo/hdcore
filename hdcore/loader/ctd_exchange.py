@@ -1,14 +1,32 @@
 from itertools import repeat
 from multiprocessing import Pool
+from collections import Counter
 
 from sqlalchemy.sql import select
 
 from hdcore.model.db import cruises, engine, parameters, quality
+from hdcore.error import (HeaderError, FileStampError, AmbigiousProfileError,
+        FileIntegrityError, DataIntegrityError, ParameterError)
+
+def _result_handler(results, print_status, exception):
+    if all([r[0] for r in results]):
+        if print_status:
+            print("\033[32mOK\033[0m")
+    else:
+        if print_status:
+            print("\033[31mFail\033[0m")
+        messages = ["{0}: {1}".format(r[1], r[2]) for r in results if r[0] is
+                False]
+        message = "\n".join(messages)
+        raise exception(message)
 
 def _stamp_check(fname):
     with open(fname) as f:
         line = f.readline()
-        return (line.startswith("CTD,"),fname)
+        if line.startswith("CTD,"):
+            return (True, fname, "ok")
+        else:
+            return (False, fname, "the CTD excahnge file stamp was not found")
 
 def _check_file_stamps(fnames, print_status):
     if print_status:
@@ -18,19 +36,7 @@ def _check_file_stamps(fnames, print_status):
     result = result.get()
     pool.close()
     pool.join()
-    if all([r[1] for r in result]):
-        if print_status:
-            print("\033[32mOK\033[0m")
-        return True
-    else:
-        if print_status:
-            fails = []
-            for f in result:
-                if f[1] is False:
-                    fails.append(f[0])
-            print("\033[31mFail\033[0m")
-            print("{} has an improper filestamp for a CTD Exchange".format(fails))
-        return False
+    _result_handler(result, print_status, FileStampError)
 
 def _file_headers(fname, expocodes):
     with open(fname) as f:
@@ -83,6 +89,8 @@ def _check_headers(fnames, print_status):
     pool.join()
     result = result.get()
 
+
+
     if all([r[0] for r in result]):
         station_id = []
         for r in result:
@@ -91,17 +99,15 @@ def _check_headers(fnames, print_status):
                 r[3]["CASTNO"])
                 )
         if len(station_id) is not len(set(station_id)):
+            #http://stackoverflow.com/questions/11236006/identify-duplicate-values-in-a-list-in-python
+            dupes = [k for k,v in Counter(station_id).items() if v>1]
             if print_status:
                 print("\033[31mFail\033[0m")
-                print("Non unique station casts present")
-            return False
-        if print_status:
-            print("\033[32mOK\033[0m")
-        return True
-    else:
-        if print_status:
-            print("\033[31mFail\033[0m")
-        return False
+            messages = ["Duplicated Expocode: {0}, Station: {1}, Cast: {2}".\
+                    format(*dup) for dup in dupes]
+            raise AmbigiousProfileError("\n".join(messages))
+
+    _result_handler(result, print_status, HeaderError)
 
 def _file_parameters(fname, known):
     # TODO check to see if the corrisponding column exists for a flag column
@@ -144,14 +150,7 @@ def _check_file_parameters(fnames, print_status):
     pool.close()
     pool.join()
     result = result.get()
-    if all([r[0] for r in result]):
-        if print_status:
-            print("\033[32mOK\033[0m")
-        return True
-    else:
-        if print_status:
-            print("\033[31mFail\033[0m")
-        return False
+    _result_handler(result, print_status, ParameterError)
 
 def _data(fname, known, q_flags):
     import csv
@@ -274,29 +273,13 @@ def _check_data(fnames, print_status):
     result = result.get()
     pool.close()
     pool.join()
-    #TODO make this actually report things (at least which file is wrong)
-    if all([r[0] for r in result]):
-        if print_status:
-            print("\033[32mOK\033[0m")
-        return True
-    else:
-        if print_status:
-            fails = []
-            for f in result:
-                if f[0] is False:
-                    fails.append(f)
-            print("\033[31mFail\033[0m")
-            for fail in fails:
-                print("{} failed due to {}".format(fail[1], fail[2]))
-        return False
+    _result_handler(result, print_status, DataIntegrityError)
 
 def load(fnames, print_status=False):
-    if not _check_file_stamps(fnames, print_status):
-        #TODO Figure out a real exception
-        raise BaseException
-    if not _check_headers(fnames, print_status):
-        raise BaseException
-    if not _check_file_parameters(fnames, print_status):
-        raise BaseException
-    if not _check_data(fnames, print_status):
-        raise BaseException
+    try:
+        _check_file_stamps(fnames, print_status)
+        _check_headers(fnames, print_status)
+        _check_file_parameters(fnames, print_status)
+        _check_data(fnames, print_status)
+    except Exception as e:
+        raise FileIntegrityError("The files could not be loaded") from e
