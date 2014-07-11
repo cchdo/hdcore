@@ -1,4 +1,4 @@
-from __future__ import print_function
+from itertools import repeat
 from multiprocessing import Pool
 
 from sqlalchemy.sql import select
@@ -32,9 +32,7 @@ def _check_file_stamps(fnames, print_status):
             print("{} has an improper filestamp for a CTD Exchange".format(fails))
         return False
 
-def _file_headers(fname_with_expo_list):
-    fname = fname_with_expo_list[0]
-    expocodes = fname_with_expo_list[1]
+def _file_headers(fname, expocodes):
     with open(fname) as f:
         stamp = f.readline()
         line = f.readline()
@@ -80,9 +78,7 @@ def _check_headers(fnames, print_status):
         expocodes = [r[0] for r in result.fetchall()]
 
     pool = Pool()
-    expocodes = [expocodes for fname in fnames]
-    args = zip(fnames, expocodes)
-    result = pool.map_async(_file_headers, args)
+    result = pool.starmap_async(_file_headers, zip(fnames, repeat(expocodes)))
     pool.close()
     pool.join()
     result = result.get()
@@ -107,11 +103,9 @@ def _check_headers(fnames, print_status):
             print("\033[31mFail\033[0m")
         return False
 
-def _file_parameters(fname_with_params):
+def _file_parameters(fname, known):
     # TODO check to see if the corrisponding column exists for a flag column
     import csv
-    fname = fname_with_params[0]
-    known = fname_with_params[1]
     with open(fname) as f:
         stamp = f.readline()
         line = f.readline()
@@ -122,15 +116,13 @@ def _file_parameters(fname_with_params):
             line = f.readline()
 
         reader = csv.reader(f, delimiter=',')
-        params = reader.next()
-        units = [u if len(u) > 0 else None for u in reader.next()]
+        params = next(reader)
+        units = [u if len(u) > 0 else None for u in next(reader)]
         if len(params) is not len(units):
             return (False, fname, "Parameter units mismatch")
-        pairs = zip(params, units)
+        pairs = list(zip(params, units))
         if len(pairs) is not len(set(pairs)):
             return (False, fname, "Duplicated parameters")
-        if len(params) is not len(units):
-            return (False, fname, "Parameter unit mismatch")
         for pair in pairs:
             if pair not in known:
                 return (False, fname, "{} is unknown".format(pair))
@@ -146,11 +138,9 @@ def _check_file_parameters(fnames, print_status):
                 )
         result = conn.execute(s)
         params = [(r[0], r[1]) for r in result.fetchall()]
-        params = [params for _ in fnames]
     
     pool = Pool()
-    fnames_with_params = zip(fnames, params)
-    result = pool.map_async(_file_parameters, fnames_with_params)
+    result = pool.starmap_async(_file_parameters, zip(fnames, repeat(params)))
     pool.close()
     pool.join()
     result = result.get()
@@ -163,11 +153,8 @@ def _check_file_parameters(fnames, print_status):
             print("\033[31mFail\033[0m")
         return False
 
-def _data(fname_with_params):
+def _data(fname, known, q_flags):
     import csv
-    fname = fname_with_params[0]
-    known = fname_with_params[1]
-    q_flags = fname_with_params[2]
     known = {(k[0], k[1]):{
         "id":k[2],
         "format": k[3],
@@ -233,9 +220,9 @@ def _data(fname_with_params):
             line = f.readline()
 
         reader = csv.reader(f, delimiter=',')
-        params = reader.next()
-        units = [u if len(u) > 0 else None for u in reader.next()]
-        pairs = zip(params, units)
+        params = next(reader)
+        units = [u if len(u) > 0 else None for u in next(reader)]
+        pairs = list(zip(params, units))
         # Exchange CTD files are pressure series
         index_id = params.index("CTDPRS") 
         index = []
@@ -270,7 +257,6 @@ def _check_data(fnames, print_status):
                     )
         result= conn.execute(s)
         params = [r for r in result.fetchall()]
-        params = [params for _ in fnames]
         s = select([
             quality.c.quality_class,
             quality.c.value,
@@ -278,13 +264,13 @@ def _check_data(fnames, print_status):
             ])
         result = conn.execute(s)
         q_flags = [r for r in result.fetchall()]
-        q_flags = [q_flags for _ in fnames]
 
-    fnames_with_params = zip(fnames, params, q_flags)
     #print(_data(fnames_with_params[0]))
     #exit()
     pool = Pool()
-    result = pool.map_async(_data, fnames_with_params)
+    result = pool.starmap_async(_data, 
+                zip(fnames, repeat(params), repeat(q_flags))
+                    )
     result = result.get()
     pool.close()
     pool.join()
