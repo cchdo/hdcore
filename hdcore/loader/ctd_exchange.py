@@ -18,16 +18,19 @@ def _check_file_stamps(fnames, print_status):
     result = result.get()
     pool.close()
     pool.join()
-    if print_status:
-        if all([r[1] for r in result]):
+    if all([r[1] for r in result]):
+        if print_status:
             print("\033[32mOK\033[0m")
-        else:
+        return True
+    else:
+        if print_status:
             fails = []
             for f in result:
                 if f[1] is False:
                     fails.append(f[0])
             print("\033[31mFail\033[0m")
             print("{} has an improper filestamp for a CTD Exchange".format(fails))
+        return False
 
 def _file_headers(fname_with_expo_list):
     fname = fname_with_expo_list[0]
@@ -65,7 +68,7 @@ def _file_headers(fname_with_expo_list):
         if len(errors) > 0:
             return (False, fname, errors)
         else:
-            return (True, fname, "ok")    
+            return (True, fname, "ok", d)    
 
 
 def _check_headers(fnames, print_status):
@@ -83,9 +86,26 @@ def _check_headers(fnames, print_status):
     pool.close()
     pool.join()
     result = result.get()
-    if print_status:
-        if all([r[0] for r in result]):
+
+    if all([r[0] for r in result]):
+        station_id = []
+        for r in result:
+            station_id.append((r[3]["EXPOCODE"],
+                r[3]["STNNBR"],
+                r[3]["CASTNO"])
+                )
+        if len(station_id) is not len(set(station_id)):
+            if print_status:
+                print("\033[31mFail\033[0m")
+                print("Non unique station casts present")
+            return False
+        if print_status:
             print("\033[32mOK\033[0m")
+        return True
+    else:
+        if print_status:
+            print("\033[31mFail\033[0m")
+        return False
 
 def _file_parameters(fname_with_params):
     # TODO check to see if the corrisponding column exists for a flag column
@@ -137,9 +157,11 @@ def _check_file_parameters(fnames, print_status):
     if all([r[0] for r in result]):
         if print_status:
             print("\033[32mOK\033[0m")
+        return True
     else:
         if print_status:
             print("\033[31mFail\033[0m")
+        return False
 
 def _data(fname_with_params):
     import csv
@@ -214,8 +236,13 @@ def _data(fname_with_params):
         params = reader.next()
         units = [u if len(u) > 0 else None for u in reader.next()]
         pairs = zip(params, units)
-         
+        # Exchange CTD files are pressure series
+        index_id = params.index("CTDPRS") 
+        index = []
         for row in reader:
+            if row[index_id] in index:
+                return (False, fname, "Non unique index parameter")
+            index.append(row[index_id])
             if row[0] == "END_DATA":
                 return (True, fname, 'ok')
             if not row_length_ok(row, pairs):
@@ -224,6 +251,7 @@ def _data(fname_with_params):
                 return (False, fname, "Some data is not formatted well")
             if not data_values_ok(row, pairs, known, q_flags):
                 return (False, fname, "Some data is inconsistent/invalid")
+
         return (False, fname, 'No "END_DATA" in file')
 
 def _check_data(fnames, print_status):
@@ -257,14 +285,32 @@ def _check_data(fnames, print_status):
     #exit()
     pool = Pool()
     result = pool.map_async(_data, fnames_with_params)
-    # Just throwing this in so it actually runs
-    r = result.get()
-    #TODO make this actually report things
-    if print_status:
-        print("\033[32mOK\033[0m")
+    result = result.get()
+    pool.close()
+    pool.join()
+    #TODO make this actually report things (at least which file is wrong)
+    if all([r[0] for r in result]):
+        if print_status:
+            print("\033[32mOK\033[0m")
+        return True
+    else:
+        if print_status:
+            fails = []
+            for f in result:
+                if f[0] is False:
+                    fails.append(f)
+            print("\033[31mFail\033[0m")
+            for fail in fails:
+                print("{} failed due to {}".format(fail[1], fail[2]))
+        return False
 
 def load(fnames, print_status=False):
-    _check_file_stamps(fnames, print_status)
-    _check_headers(fnames, print_status)
-    _check_file_parameters(fnames, print_status)
-    _check_data(fnames, print_status)
+    if not _check_file_stamps(fnames, print_status):
+        #TODO Figure out a real exception
+        raise BaseException
+    if not _check_headers(fnames, print_status):
+        raise BaseException
+    if not _check_file_parameters(fnames, print_status):
+        raise BaseException
+    if not _check_data(fnames, print_status):
+        raise BaseException
