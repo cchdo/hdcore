@@ -1,10 +1,15 @@
+import csv
+import os
+from tempfile import TemporaryDirectory
+from zipfile import ZipFile
 from itertools import repeat
 from multiprocessing import Pool
 from collections import Counter
 
 from sqlalchemy.sql import select
 
-from hdcore.model.db import cruises, engine, parameters, quality
+from hdcore.model.db import (engine, parameters, quality, cruises, profiles,
+        hydro_data)
 from hdcore.error import (HeaderError, FileStampError, AmbigiousProfileError,
         FileIntegrityError, DataIntegrityError, ParameterError)
 
@@ -110,8 +115,6 @@ def _check_headers(fnames, print_status):
     _result_handler(result, print_status, HeaderError)
 
 def _file_parameters(fname, known):
-    # TODO check to see if the corrisponding column exists for a flag column
-    import csv
     with open(fname) as f:
         stamp = f.readline()
         line = f.readline()
@@ -157,8 +160,8 @@ def _data(fname, known, q_flags):
     known = {(k[0], k[1]):{
         "id":k[2],
         "format": k[3],
-        "quality": k[4],
-        "quality_class": k[5],
+        "quality": (k[5], k[6]),
+        "quality_class": k[4],
         } for k in known}
 
     def row_length_ok(row, pairs):
@@ -196,15 +199,27 @@ def _data(fname, known, q_flags):
         corresponding data column has a non fill value
         """
         # check the flag values and make a list of things that should have data
-        data_mask = [True for _ in row] #assume all positions should have data
+        data_with_flags = {}
+        for point, pair in zip(row, pairs):
+            if known[pair]["quality_class"] is not None:
+                continue
+            if known[pair]["quality"] in known:
+                data_with_flags[known[pair]["quality"]] = point
+
         for point, pair in zip(row, pairs):
             if known[pair]["quality_class"] is None:
                 continue
-            allowed_values = {}
-            for q in q_flags:
-                if q[0] == known[pair]["quality_class"]:
-                    allowed_values[q[1]] = q[2]
-            if point not in allowed_values:
+            q_key = (known[pair]["quality_class"], point)
+            if q_key in q_flags:
+                if pair not in data_with_flags: # Flag column with no data col
+                    return False
+                if q_flags[q_key] is True: #flag says there should be data
+                    if data_with_flags[pair].startswith("-999"):
+                        return False
+                else: # guess there should be no data, it had better be a fill
+                    if not data_with_flags[pair].startswith("-999"):
+                        return False
+            else:
                 return False
             
         return True
@@ -244,16 +259,21 @@ def _check_data(fnames, print_status):
     if print_status:
         print("Checking file data...", end='')
     with engine.connect() as conn:
+        param_alias = parameters.alias()
         s = select([
             parameters.c.name,
             parameters.c.units_repr,
             parameters.c.id,
             parameters.c.format_string,
-            parameters.c.quality,
             parameters.c.quality_class,
+            param_alias.c.name, #quality name
+            param_alias.c.units, #quality units, probably None
             ]).where(
                     parameters.c.type=="cchdo"
-                    )
+                    ).select_from(
+                            parameters.outerjoin(param_alias,
+                                parameters.c.quality == param_alias.c.id)
+                            )
         result= conn.execute(s)
         params = [r for r in result.fetchall()]
         s = select([
@@ -262,10 +282,8 @@ def _check_data(fnames, print_status):
             quality.c.has_data,
             ])
         result = conn.execute(s)
-        q_flags = [r for r in result.fetchall()]
+        q_flags = {(r[0], r[1]):r[2] for r in result.fetchall()}
 
-    #print(_data(fnames_with_params[0]))
-    #exit()
     pool = Pool()
     result = pool.starmap_async(_data, 
                 zip(fnames, repeat(params), repeat(q_flags))
@@ -275,6 +293,7 @@ def _check_data(fnames, print_status):
     pool.join()
     _result_handler(result, print_status, DataIntegrityError)
 
+
 def load(fnames, print_status=False):
     try:
         _check_file_stamps(fnames, print_status)
@@ -283,3 +302,16 @@ def load(fnames, print_status=False):
         _check_data(fnames, print_status)
     except Exception as e:
         raise FileIntegrityError("The files could not be loaded") from e
+
+    
+
+
+def load_zip(fname):
+    with TemporaryDirectory() as tempdir:
+        with ZipFile(fname) as zipf:
+            zipf.extractall(path=tempdir)
+            for base, dirs, fnames in os.walk(tempdir):
+                if len(dirs) is not 0:
+                    raise BaseException("Directories present in zipfile")
+                load([os.path.join(base, fname) for fname in fnames])
+            

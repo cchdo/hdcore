@@ -3,7 +3,7 @@ from sqlalchemy.sql import select
 from sqlalchemy.dialects.postgresql import JSON, ARRAY
 from sqlalchemy.dialects.postgresql import array as pg_array
 from sqlalchemy import (Table, Column, MetaData, Integer, String, Boolean,
-DateTime)
+DateTime, ForeignKey)
 from ujson import dumps as json_serializer
 
 metadata = MetaData()
@@ -21,7 +21,7 @@ parameters = Table('parameters', metadata,
         Column('type', String),
         Column('units', String),
         Column('units_repr', String),
-        Column('quality', Integer),
+        Column('quality', Integer, ForeignKey("parameters.id")),
         Column('canonical_id', Integer),
         Column('format_string', String),
         Column('quality_class', String),
@@ -49,6 +49,7 @@ profiles = Table('profiles', metadata,
         Column('parameters', ARRAY(Integer)),
         Column('station', String),
         Column('cast', String),
+        Column('type', String),
         )
 
 engine = create_engine('postgresql://abarna@localhost:5432/postgres',
