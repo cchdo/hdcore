@@ -311,11 +311,10 @@ def load(fnames, print_status=False):
 
 
 def load_zip(fname):
-    with TemporaryDirectory() as tempdir:
-        with ZipFile(fname) as zipf:
-            zipf.extractall(path=tempdir)
-            for base, dirs, fnames in os.walk(tempdir):
-                if len(dirs) is not 0:
-                    raise BaseException("Directories present in zipfile")
-                load([os.path.join(base, fname) for fname in fnames])
+    with TemporaryDirectory() as tempdir, ZipFile(fname) as zipf:
+        zipf.extractall(path=tempdir)
+        for base, dirs, fnames in os.walk(tempdir):
+            if len(dirs) is not 0:
+                raise BaseException("Directories present in zipfile")
+            load([os.path.join(base, fname) for fname in fnames])
             
