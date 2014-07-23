@@ -112,6 +112,10 @@ def _check_headers(fnames, print_status):
                     format(*dup) for dup in dupes]
             raise AmbigiousProfileError("\n".join(messages))
 
+        # only deal with one cruise at a time, anything else gets messy
+        if len(set([s[0] for s in station_id])) is not 1:
+            raise BaseException("TODO: Make exception for multiple expocodes")
+
     _result_handler(result, print_status, HeaderError)
 
 def _file_parameters(fname, known):
