@@ -208,7 +208,7 @@ def _data(fname, known, q_flags):
             if known[pair]["quality_class"] is not None:
                 continue
             if known[pair]["quality"] in known:
-                data_with_flags[known[pair]["quality"]] = point
+                data_with_flags[known[pair]["quality"]] = point.strip()
 
         for point, pair in zip(row, pairs):
             if known[pair]["quality_class"] is None:
