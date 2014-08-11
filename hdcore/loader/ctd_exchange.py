@@ -7,9 +7,12 @@ from multiprocessing import Pool
 from collections import Counter
 
 from sqlalchemy.sql import select
+from sqlalchemy import and_
+
+from ujson import dumps
 
 from hdcore.model.db import (engine, parameters, quality, cruises, profiles,
-        hydro_data)
+        hydro_data, pending_profiles)
 from hdcore.error import (HeaderError, FileStampError, AmbigiousProfileError,
         FileIntegrityError, DataIntegrityError, ParameterError)
 
@@ -307,8 +310,102 @@ def load(fnames, print_status=False):
     except Exception as e:
         raise FileIntegrityError("The files could not be loaded") from e
 
-    
+    with engine.connect() as conn:
+        params = {}
+        s = select([parameters.c.name, parameters.c.units_repr, parameters.c.id])
+        result = conn.execute(s)
+        for row in result:
+            params[(row[0], row[1])] = row[2]
 
+    c_data = {}
+    c_data["profiles"] = []
+    for fname in fnames:
+        with open(fname, 'r') as f, engine.connect() as conn:
+            pfile = {}
+            pfile["type"] = "ctd_woce"
+            num_headers = 0
+            headers = {}
+            comments = ""
+            for row in f:
+                if row.startswith("CTD") or row.startswith("#"):
+                    if row.startswith("#"):
+                        row = row[1:]
+                    comments = comments + row
+                    continue 
+                else:
+                    num_headers = int(row.split('=')[1])
+                    break
+            pfile["comments"] = comments
+            for _ in range(num_headers - 1):
+                row = next(f).split('=')
+                headers[row[0].strip()] = row[1].strip()
+            
+            pfile["station"] = headers["STNNBR"]
+            pfile["cast"] = headers["CASTNO"]
+            pfile["date_z"] = headers["DATE"]
+            pfile["latitude"] = headers["LATITUDE"]
+            pfile["longitude"] = headers["LONGITUDE"]
+            if "TIME" in headers:
+                pfile["time_z"] = headers["TIME"]
+            s = select([cruises.c.id]).where(
+                        cruises.c.expocode == headers['EXPOCODE']
+                        )
+            result = conn.execute(s)
+            cruise_id = result.fetchone().id
+            if "cruise_id" not in c_data:
+                c_data["cruise_id"] = cruise_id
+            else:
+                if not c_data["cruise_id"] == cruise_id:
+                    raise Exception("TODO: make real exception and report")
+
+            p_names = [s.strip() for s in next(f).split(',')]
+            u_names = [s.strip() for s in next(f).split(',')]
+            u_names = [s if len(s) > 0 else None for s in u_names]
+            param_id_list = []
+            for p_u in zip(p_names, u_names):
+                param_id_list.append(params[p_u])
+            ex = csv.reader(f, delimiter=',')
+            key_param_id = params[("CTDPRS", "DBAR")]
+            data = []
+            for row in ex:
+                if row[0].startswith("END_DATA"):
+                    break
+                data.append([s.strip() for s in row])
+            post_data = ""
+            for l in f:
+                post_data= post_data + l
+            pfile["post_data"] = post_data
+            pfile["data"] = []
+
+            key_id = params[("CTDPRS", "DBAR")]
+            save_headers = [("DATE", None),
+                    ("TIME", None),
+                    ("LATITUDE", None),
+                    ("LONGITUDE", None),
+                    ("DEPTH", "METERS"),
+                    ("INSTRUMENT_ID", None),
+                    ]
+            orig_params = []
+            for h in save_headers:
+                if h[0] in headers:
+                    orig_params.append(params[h])
+            pfile["parameters"] = orig_params + param_id_list
+
+            for row in data:
+                h_data = {}
+                h_data["key_param"] = key_param_id
+                data = {}
+                for h in save_headers:
+                    if h[0] in headers:
+                        data[params[h]] = headers[h[0]]
+                for param_id, datum in zip(param_id_list, row):
+                    if param_id == key_param_id:
+                        h_data["key_value"] = datum
+                    data[param_id] = datum
+                h_data["data"] = data
+                pfile["data"].append(h_data)
+            c_data["profiles"].append(pfile)
+    return c_data
 
 def load_zip(fname):
     with TemporaryDirectory() as tempdir, ZipFile(fname) as zipf:
@@ -316,5 +413,5 @@ def load_zip(fname):
         for base, dirs, fnames in os.walk(tempdir):
             if len(dirs) is not 0:
                 raise BaseException("Directories present in zipfile")
-            load([os.path.join(base, fname) for fname in fnames])
+            return load([os.path.join(base, fname) for fname in fnames])
             

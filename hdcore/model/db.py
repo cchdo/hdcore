@@ -3,7 +3,7 @@ from sqlalchemy.sql import select
 from sqlalchemy.dialects.postgresql import JSON, ARRAY
 from sqlalchemy.dialects.postgresql import array as pg_array
 from sqlalchemy import (Table, Column, MetaData, Integer, String, Boolean,
-DateTime, ForeignKey)
+DateTime, ForeignKey, Date, Time, Numeric)
 from ujson import dumps as json_serializer
 
 metadata = MetaData()
@@ -50,6 +50,17 @@ profiles = Table('profiles', metadata,
         Column('station', String),
         Column('cast', String),
         Column('type', String),
+        Column('date_z', Date),
+        Column('time_z', Time),
+        Column('latitude', Numeric),
+        Column('longitude', Numeric),
+        Column('comments', String),
+        Column('post_data', String),
+        )
+pending_profiles = Table("pending_profiles", metadata,
+        Column('id', Integer, primary_key=True),
+        Column('group', Integer),
+        Column('data', JSON),
         )
 
 engine = create_engine('postgresql://abarna@localhost:5432/postgres',
