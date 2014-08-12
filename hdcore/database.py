@@ -50,11 +50,20 @@ def versioned_load(data):
                     )
             r = conn.execute(s)
             r = r.fetchall()
-            if len(r) is 1:
-                pass
+            old_profile_id = None
+            old_profile = {}
             if len(r) > 1:
                 raise BaseException("TODO: make non-unique profile error")
-            exit()
+            if len(r) is 1:
+                old_profile_id = r[0][0]
+                s = select([hydro_data.c.key_param, hydro_data.c.key_value,
+                    hydro_data.c.data, hydro_data.c.id]).where(hydro_data.c.id.in_(r[0][1]))
+                r = conn.execute(s)
+                for p in r.fetchall():
+                    old_profile[(p[0], p[1])] = (p[3], loads(p[2]))
+
+            old_ids = {old_profile[k][0] for k in old_profile}
+            ids_still_current = []
             for d in profile['data']:
                 # only store actual meaningful data..
                 del_keys = []
@@ -64,17 +73,30 @@ def versioned_load(data):
                 for key in del_keys:
                     del d['data'][key]
 
-                
+
+                data_key = (d['key_param'], d['key_value'])
+                if data_key in old_profile:
+                    if old_profile[data_key][1] == d['data']:
+                        ids_still_current.append(old_profile[data_key][0])
+                        continue
+
                 d['current'] = True
                 d['cruise_id'] = data["cruise_id"]
                 profile_insert.append(d)
+            ids_still_current = set(ids_still_current)
+            ids_mark_not_current = old_ids - ids_still_current
+            if len(ids_mark_not_current) is 0:
+                #no new data for this profile, continue to the next one
+                continue
             r = conn.execute(hydro_data.insert().\
                     returning(hydro_data.c.id).values(profile_insert))
             ids = ([e[0] for e in r.fetchall()])
+            ids = ids + list(ids_still_current)
             del profile["data"]
             profile["cruise_id"] = data["cruise_id"]
             profile["samples"] = ids
             profile["current"] = True
+            profile["previous_id"] = old_profile_id
             profile["date_z"] = date(
                     int(profile["date_z"][:4]),
                     int(profile["date_z"][4:6]),
@@ -84,6 +106,10 @@ def versioned_load(data):
                         int(profile["time_z"][:2]),
                         int(profile["time_z"][2:]))
             conn.execute(profiles.insert().values(profile))
+            conn.execute(profiles.update().where(profiles.c.id==old_profile_id).\
+                    values(current=False))
+            conn.execute(hydro_data.update().where(hydro_data.c.id.in_(
+                ids_mark_not_current)).values(current=False))
         trans.commit()
 
 def versioned_load_jsons(s):
