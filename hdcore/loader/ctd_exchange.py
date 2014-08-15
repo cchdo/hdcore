@@ -378,7 +378,12 @@ def load(fnames, print_status=False):
             pfile["data"] = []
 
             key_id = params[("CTDPRS", "DBAR")]
-            save_headers = [("DATE", None),
+            save_headers = [
+                    ("EXPOCODE", None),
+                    ("SECT_ID", None),
+                    ("STNNBR", None),
+                    ("CASTNO", None),
+                    ("DATE", None),
                     ("TIME", None),
                     ("LATITUDE", None),
                     ("LONGITUDE", None),

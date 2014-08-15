@@ -1,4 +1,5 @@
-from sqlalchemy.sql import select
+from sqlalchemy.sql import select, case, literal_column
+from sqlalchemy import Float, func
 from ujson import loads
 
 from hdcore.model.db import engine, parameters, quality, profiles, hydro_data
@@ -84,34 +85,116 @@ def data_to_list(data_dict, requested_ids, p_map, *, precision_list = False):
     return l
 
 
-FILL_VALUE = "-999"
-def profile_to_exchange(p_id, param_ids=None):
-    with engine.connect() as conn:
-        s = profiles.select().where(profiles.c.id==p_id)
-        r = conn.execute(s)
-        profile = r.fetchone()
-        p_map = make_param_quality_dict(conn)
+def data_table_query_builder(requested_ids, p_map, *, precisions=None):
+    if precisions:
+        if len(requested_ids) != len(precisions):
+            raise BaseException("TODO: list of params and precisions must be the same")
+    select_list = []
+    requested_set = set(requested_ids)
+    if len(requested_set) != len(requested_ids):
+        raise BaseException("TODO: make duplicate id exception")
+    for i, r_id in enumerate(requested_ids):
+        FILL_VALUE = "-999"
+        p = p_map[r_id]
+        if p["parameter"].quality_class:
+            q_for = set(p["quality_for"])
+            data_id = q_for.intersection(requested_set)
+            if len(data_id) is not 1:
+                raise BaseException("TODO: make error for quality col with no or ambigious data col")
+            data_id = list(data_id)[0]
+            c = case([
+                (hydro_data.c.data.has_key(str(r_id)), hydro_data.c.data[str(r_id)].astext),
+                (hydro_data.c.data.has_key(str(data_id)), p["data"])
+                ], else_= p["nodata"])
+            select_list.append(c)
+            continue
+        else:
+            if precisions:
+                if precisions[i] > 0:
+                    FILL_VALUE = FILL_VALUE + "." + "0" * precisions[i]
+            c = case([
+                (hydro_data.c.data.has_key(str(r_id)), hydro_data.c.data[str(r_id)].astext)
+                ], else_= FILL_VALUE)
+            select_list.append(c)
+    return select_list
 
-        ctd_headers = [21,22,23,24,25,26] #TODO put this data in the db
+def get_col_precision_query(requested_ids):
+    select_list = []
+    requested_set = set(requested_ids)
+    if len(requested_set) != len(requested_ids):
+        raise BaseException("TODO: make duplicate id exception")
+    for r_id in requested_ids:
+        pos = func.position(literal_column("'.'").in_([hydro_data.c.data[str(r_id)].astext]))
+        length = func.char_length(hydro_data.c.data[str(r_id)].astext)
+        c = func.max(
+        case([
+            (pos > 0,
+                length - pos)
+            ], else_=0))
+        select_list.append(c)
+    return select_list
 
-        param_names = []
-        param_units = []
-        print_ids = []
-        for param in profile.parameters:
-            if param in ctd_headers:
-                continue
-            print_ids.append(param)
-            param_names.append(p_map[param]["parameter"].name)
-            if p_map[param]["parameter"].units_repr:
-                param_units.append(p_map[param]["parameter"].units_repr)
-            else:
-                param_units.append("")
-        print(",".join(param_names))
-        print(",".join(param_units))
 
-        s = select([hydro_data.c.data]).where(
-                hydro_data.c.id.in_(profile.samples))
-        r = conn.execute(s)
-        for d in r.fetchall():
-            d = loads(d.data)
-            print(data_to_list(d, print_ids, p_map,))
+def profile_data_in_excahnge(conn, profile, p_map, output_params, param_ids=None):
+    p_id = profile.id
+    param_names = []
+    param_units = []
+    print_ids = []
+    for param in output_params:
+        print_ids.append(param)
+        param_names.append(p_map[param]["parameter"].name)
+        if p_map[param]["parameter"].units_repr:
+            param_units.append(p_map[param]["parameter"].units_repr)
+        else:
+            param_units.append("")
+
+    s = get_col_precision_query(print_ids)
+    subq = select([func.unnest(profiles.c.samples)]).where(profiles.c.id==p_id)
+    s = select(s).where(
+        hydro_data.c.id.in_(subq)
+        )
+    r = conn.execute(s)
+    precisions = r.fetchone()
+
+    output = ""
+    output += (",".join(param_names) + "\n")
+    output += (",".join(param_units) + "\n")
+
+    s = data_table_query_builder(print_ids, p_map, precisions=precisions)
+    subq = select([func.unnest(profiles.c.samples)]).where(profiles.c.id==p_id)
+    s = select(s).where(
+        hydro_data.c.id.in_(subq)
+        ).order_by(hydro_data.c.data['1'].cast(Float))
+    r = conn.execute(s)
+    f_str = ""
+    for i, p in enumerate(print_ids):
+        length = p_map[p]["parameter"].format_string[:-1]
+        if i is 0:
+            f_str = "{:>" + length + "s}"
+        else:
+            f_str = f_str + ",{:>" + length + "s}"
+    for d in r.fetchall():
+        output += f_str.format(*d) + "\n"
+    output += "END_DATA\n"
+    return output
+
+def ctd_profile_headers(conn, profile, h_ids, p_map, cruise):
+    first_sample = profile.samples[0]
+    s = select([hydro_data.c.data]).where(hydro_data.c.id==first_sample)
+    r = conn.execute(s)
+    data = r.fetchone().data
+    data = loads(data)
+    headers = []
+    for id in h_ids:
+        if str(id) in data:
+            headers.append(p_map[id]["parameter"].name + " = " + data[str(id)])
+
+    output = ""
+    output += "CTD,20140814CCHSIODDB\n"
+    comments = profile.comments.strip().splitlines()
+    for comment in comments:
+        output += "#" + comment + "\n"
+    output += "NUMBER_HEADERS = " + str(len(headers)+1) + "\n"
+    output += "\n".join(headers)
+    output += "\n"
+    return output
