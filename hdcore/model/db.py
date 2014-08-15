@@ -1,6 +1,6 @@
 from sqlalchemy import create_engine
 from sqlalchemy.sql import select
-from sqlalchemy.dialects.postgresql import JSON, ARRAY
+from sqlalchemy.dialects.postgresql import JSONB, ARRAY
 from sqlalchemy.dialects.postgresql import array as pg_array
 from sqlalchemy import (Table, Column, MetaData, Integer, String, Boolean,
 DateTime, ForeignKey, Date, Time, Numeric)
@@ -9,7 +9,7 @@ from ujson import dumps as json_serializer
 metadata = MetaData()
 hydro_data = Table('hydro_data', metadata,
         Column('id', Integer, primary_key = True),
-        Column('data', JSON),
+        Column('data', JSONB),
         Column('key_param', Integer),
         Column('key_value', String),
         Column('current', Boolean),
@@ -60,7 +60,7 @@ profiles = Table('profiles', metadata,
 pending_profiles = Table("pending_profiles", metadata,
         Column('id', Integer, primary_key=True),
         Column('group', Integer),
-        Column('data', JSON),
+        Column('data', JSONB),
         )
 
 engine = create_engine('postgresql://abarna@localhost:5432/postgres',
